@@ -1,0 +1,70 @@
+# Render blueprint: all three services as ONE web service.
+#
+# Why one service: Render's free tier grants 750 instance-hours per calendar
+# month per WORKSPACE, not per service. One always-on service burns ~744h in a
+# 31-day month, which fits. Two always-on services burn ~1488h and get the
+# whole workspace suspended mid-month — that is exactly what happened on
+# 2026-06-28 and forced the move to Fly.
+#
+# planerdenbot was shut down 2026-08-10 and is intentionally absent here.
+# Every value below is marked `sync: false`: Render prompts for it once in the
+# dashboard and stores it in its own secret store. No token ever lands in git.
+
+services:
+  - type: web
+    name: gamepass-all-in-one
+    runtime: docker
+    plan: free
+    region: frankfurt          # Neon Postgres lives in eu-central-1
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true
+
+    envVars:
+      # --- GamePass backend (Node) ---------------------------------------
+      - key: DATABASE_URL                 # Neon, pooled connection
+        sync: false
+      - key: DIRECT_URL                   # Neon, direct — used by prisma
+        sync: false
+      - key: GAMEPASS_BOT_TOKEN           # @Liquid_Chess_bot
+        sync: false
+      - key: BOT_USERNAME
+        value: Liquid_Chess_bot
+      - key: JWT_SECRET
+        generateValue: true               # rotating it only re-auths the mini app
+      - key: TELEGRAM_WEBHOOK_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        value: https://chess-telegram-mini-app.vercel.app
+
+      # --- vibecod-relay (front door for @Myvibecodbot) -------------------
+      - key: RELAY_BOT_TOKEN
+        sync: false
+      - key: PULL_SECRET                  # must match RELAY_SECRET on the Mac
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: ALLOWED_ID
+        sync: false
+      - key: RELAY_DB
+        value: /data/relay.db             # see DISK note below
+
+      # --- summarizer -----------------------------------------------------
+      - key: TRANSCRIBER_BOT_TOKEN        # @dentransbot
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: WEBHOOK_BASE_URL
+        value: https://gamepass-all-in-one.onrender.com/transcriber
+      - key: STATE_DB_PATH
+        value: /data/bot_state.sqlite3    # see DISK note below
+
+# DISK — UNRESOLVED
+# Render's free tier has no persistent disk: /data is ephemeral and is wiped on
+# every deploy and every restart. Two services still keep state there:
+#   * summarizer  — STATE_DB_PATH holds user memory and reminders
+#   * relay       — RELAY_DB holds the command queue and session snapshots
+# The relay's data is a live queue and losing it is harmless. The summarizer's
+# memory is not — it must move to Neon before this goes live, otherwise we
+# recreate the exact resetting-data bug the Fly migration fixed.

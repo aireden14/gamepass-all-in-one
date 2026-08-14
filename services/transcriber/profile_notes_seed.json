@@ -1,0 +1,8 @@
+{
+  "@denrech": [
+    {
+      "created_at": "2026-05-31",
+      "text": "Рабочая схема для заявок с сайтов в Telegram: сайт отправляет форму на свой серверный /api/lead, а сервер пересылает JSON в общий endpoint бота POST /lead. Браузер не вызывает Telegram Bot API напрямую. Бот форматирует заявку, добавляет телефон и wa.me-ссылку, отправляет в LEADS_CHAT_ID. Если чат ещё не выбран, заявка сохраняется в очередь temp/pending_leads.jsonl и сайт получает queued:true, а не ложный успех доставки. Админ @denrech один раз пишет /set_leads_chat, бот сохраняет chat_id и выгружает очередь; команда доступна только LEAD_ADMIN_USERNAMES=denrech. WhatsApp на сайте показываем только как дополнительную ссылку после отправки или при ошибке, но не как замену Telegram. Для Vite local dev нужен middleware/proxy на /api/lead, потому что обычный Vite не исполняет Vercel functions. Проверка: curl POST https://site/api/lead должен вернуть {ok:true, queued:false} для реальной доставки."
+    }
+  ]
+}

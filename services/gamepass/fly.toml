@@ -1,0 +1,29 @@
+# GamePass backend on Fly.io.
+# Deploy: fly launch --no-deploy (first time, to create the app), then fly deploy.
+# Required secrets: DATABASE_URL, DIRECT_URL, TELEGRAM_BOT_TOKEN, JWT_SECRET.
+app = "gamepass-backend"
+primary_region = "fra"
+
+[build]
+
+# Sync the Prisma schema to Supabase before each release goes live.
+[deploy]
+  # Refuse destructive schema changes instead of silently dropping production data.
+  release_command = "/app/node_modules/.bin/prisma db push --schema /app/prisma/schema.prisma --skip-generate"
+
+[http_service]
+  internal_port = 3001
+  force_https = true
+  # Suspend when idle instead of running 24/7 (~$3.19/mo for a machine nobody
+  # is playing on at 4am). "suspend" freezes the process image rather than
+  # killing it, so waking is sub-second — this is not a Render-style cold start,
+  # and the original "no cold-start DB timeouts" worry does not apply.
+  # A live socket.io match counts as traffic and keeps the machine up; it only
+  # suspends once no one is connected.
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

@@ -1,0 +1,104 @@
+# Single-port router. Render (and Fly) give us exactly one public port,
+# so every service is reached by path prefix through here.
+#
+#   /api/*, /socket.io/*  -> GamePass backend   (Node,   :3001)
+#   /relay/*              -> vibecod-relay      (Python, :8081)
+#   /transcriber/*        -> summarizer bot     (Python, :8082)
+#   /health               -> answered by nginx itself
+#
+# planerdenbot has no HTTP surface: it long-polls Telegram, so it needs no route.
+
+worker_processes 1;
+error_log /dev/stderr warn;
+pid /run/nginx.pid;
+
+events {
+  worker_connections 512;
+}
+
+http {
+  include       /etc/nginx/mime.types;
+  default_type  application/octet-stream;
+  access_log    off;
+
+  sendfile      on;
+  keepalive_timeout 65;
+
+  # Voice notes and audio uploads go through here on their way to the
+  # transcriber, so the default 1m cap is too small.
+  client_max_body_size 64m;
+
+  # Required for WebSocket upgrades: pass "upgrade" through when the client
+  # asks for it, and "close" otherwise.
+  map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+  }
+
+  upstream gamepass    { server 127.0.0.1:${GAMEPASS_PORT};    keepalive 16; }
+  upstream relay       { server 127.0.0.1:${RELAY_PORT};       keepalive 8;  }
+  upstream transcriber { server 127.0.0.1:${TRANSCRIBER_PORT}; keepalive 8;  }
+
+  server {
+    listen ${PORT};
+    server_name _;
+
+    # Platform health check. Deliberately served by nginx and not proxied:
+    # it must stay green while an individual service restarts, otherwise the
+    # host kills the whole container over one crashed bot.
+    location = /health {
+      add_header Content-Type application/json;
+      return 200 '{"ok":true}';
+    }
+
+    # --- GamePass: real-time game traffic -------------------------------
+    location /socket.io/ {
+      proxy_pass http://gamepass;
+      proxy_http_version 1.1;
+      proxy_set_header Upgrade    $http_upgrade;
+      proxy_set_header Connection $connection_upgrade;
+      proxy_set_header Host       $host;
+      proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      # Games can sit idle mid-match; do not cut the socket at the default 60s.
+      proxy_read_timeout  3600s;
+      proxy_send_timeout  3600s;
+    }
+
+    location /api/ {
+      proxy_pass http://gamepass;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # --- vibecod-relay --------------------------------------------------
+    # The Mac long-polls /relay/commands/pull, so the read timeout must
+    # outlast the agent's poll window.
+    location /relay/ {
+      proxy_pass http://relay/;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_read_timeout 120s;
+      proxy_buffering off;
+    }
+
+    # --- summarizer -----------------------------------------------------
+    location /transcriber/ {
+      proxy_pass http://transcriber/;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      # Whisper round-trips through Groq can be slow on long recordings.
+      proxy_read_timeout 300s;
+    }
+
+    location / {
+      return 404 '{"error":"unknown route"}';
+    }
+  }
+}

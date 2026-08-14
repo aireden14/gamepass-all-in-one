@@ -1,0 +1,135 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Runtime uses the Supabase transaction pooler; schema changes use the session pooler.
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id            Int      @id @default(autoincrement())
+  telegramId    BigInt   @unique
+  username      String?
+  firstName     String
+  lastName      String?
+  photoUrl      String?
+  rating        Int      @default(1000)
+  wins          Int      @default(0)
+  losses        Int      @default(0)
+  draws         Int      @default(0)
+  totalGames    Int      @default(0)
+  isBot         Boolean  @default(false)
+  pieceStyle    String   @default("apple")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  gamesAsWhite  Game[]   @relation("WhitePlayer")
+  gamesAsBlack  Game[]   @relation("BlackPlayer")
+
+  catanPlayers  CatanPlayer[] @relation("CatanPlayers")
+  catanHosted   CatanGame[]   @relation("CatanHost")
+  catanWon      CatanGame[]   @relation("CatanWinner")
+
+  sudokuProfile SudokuProfile? @relation("SudokuProfile")
+
+  beatTracks    BeatTrack[]    @relation("BeatTracks")
+}
+
+model BeatTrack {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  user      User     @relation("BeatTracks", fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  bpm       Int      @default(92)
+  scale     String   @default("minorPentatonic")
+  dataJson  String   // full normalized WAVE FORGE track as JSON
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model SudokuProfile {
+  id               Int      @id @default(autoincrement())
+  userId           Int      @unique
+  user             User     @relation("SudokuProfile", fields: [userId], references: [id], onDelete: Cascade)
+  rating           Int      @default(0)
+  xp               Int      @default(0)
+  level            Int      @default(1)
+  played           Int      @default(0)
+  completed        Int      @default(0)
+  bestTimesJson    String   @default("{}")
+  dailyStreak      Int      @default(0)
+  bestStreak       Int      @default(0)
+  lastDailyDate    String?
+  dailyTasksJson   String   @default("{}")
+  dailyRewardJson  String   @default("{}")
+  achievementsJson String   @default("[]")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model CatanGame {
+  id            String   @id
+  status        String   @default("WAITING") // WAITING | SETUP | ACTIVE | COMPLETED | CANCELLED
+  maxPlayers    Int      @default(4)
+  hostId        Int
+  host          User     @relation("CatanHost", fields: [hostId], references: [id])
+  winnerId      Int?
+  winner        User?    @relation("CatanWinner", fields: [winnerId], references: [id])
+
+  boardJson     String
+  stateJson     String
+  settingsJson  String   @default("{}")
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  finishedAt    DateTime?
+
+  players       CatanPlayer[]
+}
+
+model CatanPlayer {
+  id        Int        @id @default(autoincrement())
+  gameId    String
+  game      CatanGame  @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  userId    Int?
+  user      User?      @relation("CatanPlayers", fields: [userId], references: [id])
+  seat      Int
+  color     String
+  isBot     Boolean    @default(false)
+  botLevel  String?
+  hasLeft   Boolean    @default(false)
+
+  @@unique([gameId, seat])
+}
+
+model Game {
+  id              String @id @default(uuid())
+  playerWhiteId   Int?
+  playerBlackId   Int?
+  status          String @default("WAITING")
+  fen             String     @default("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+  pgn             String     @default("")
+  timerWhite      Int
+  timerBlack      Int
+  increment       Int        @default(0)
+  currentTurn     String     @default("w")
+  lastMoveAt      DateTime?
+  winner          String?
+  endReason       String?
+  pauseRequestBy  String?
+  drawOfferBy     String?
+  isBotGame       Boolean    @default(false)
+  botDifficulty   String?    // "easy" | "medium"
+  botColor        String?    // "white" | "black"
+  settings        String   @default("{}")
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  playerWhite     User?      @relation("WhitePlayer", fields: [playerWhiteId], references: [id])
+  playerBlack     User?      @relation("BlackPlayer", fields: [playerBlackId], references: [id])
+}

@@ -1,0 +1,15 @@
+aiogram
+groq
+python-dotenv
+aiohttp
+imageio-ffmpeg
+Pillow
+pillow-heif
+img2pdf
+pypdf
+reportlab
+yt-dlp[default]>=2026.3.17
+yt-dlp-ejs>=0.8.0
+nodejs-bin[cmd]==18.4.0a4
+anthropic
+tzdata
