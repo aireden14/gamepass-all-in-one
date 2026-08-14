@@ -57,10 +57,14 @@ COPY services/gamepass/package*.json ./services/gamepass/
 RUN cd services/gamepass && npm ci --no-audit --no-fund
 
 COPY services/gamepass/ ./services/gamepass/
+# No `npm prune --omit=dev` here: the Prisma CLI is a devDependency, and the
+# entrypoint needs it at RUNTIME to sync the schema (Fly did this in its
+# release_command; Render has no equivalent hook). Pruning would strip the CLI
+# and leave a connected-but-empty database. Disk is not the constrained
+# resource on this plan — the 512MB RAM cap is.
 RUN cd services/gamepass \
     && npx prisma generate \
     && npm run build \
-    && npm prune --omit=dev \
     && rm -rf src
 
 # ------------------------------------------------------------- Bot sources
