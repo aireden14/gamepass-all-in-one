@@ -1,0 +1,54 @@
+name: Keep the service awake
+
+# Render's free tier spins a web service down after 15 minutes with no
+# requests, and waking it back up takes 20-50 seconds. Pinging every 10
+# minutes keeps it resident so the games and bots answer instantly.
+#
+# QUOTA MATH — read before touching this.
+# The free tier grants 750 instance-hours per month per WORKSPACE. Staying up
+# around the clock costs ~744h in a 31-day month, so this fits with roughly
+# six hours to spare. That margin only exists because the workspace runs
+# exactly ONE service. Adding a second always-on service blows the quota and
+# Render suspends everything until the next month — that already happened on
+# 2026-06-28. If another service ever lands here, delete this workflow first.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping /health
+        shell: bash
+        run: |
+          set -uo pipefail
+          URL="https://gamepass-all-in-one.onrender.com/health"
+
+          # --max-time 120 because a cold start can take ~50s; a short timeout
+          # would abort mid-wake and leave the service asleep, which is the
+          # exact failure the Mac agent hit with its 10s client timeout.
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 120 "$URL" || echo "000")
+          echo "first ping: HTTP $code"
+
+          if [ "$code" = "200" ]; then
+            exit 0
+          fi
+
+          # One retry: the first request after a spin-down sometimes returns
+          # 502 from Render's edge while the container is still booting.
+          sleep 20
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 120 "$URL" || echo "000")
+          echo "retry ping: HTTP $code"
+
+          [ "$code" = "200" ] || { echo "::warning::service did not answer 200"; exit 0; }
