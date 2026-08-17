@@ -18,12 +18,16 @@ const BASE_POINTS: Record<Difficulty, number> = {
   abyss: 120,
 };
 const HARD_PLUS: Difficulty[] = ["hard", "expert", "labyrinth", "abyss"];
+// Поля крупнее классики: 144 и 256 клеток вместо 81 — и опыт за них выше.
+const SIZE_FACTOR: Record<number, number> = { 9: 1, 12: 1.5, 16: 2 };
+const SIZES = [9, 12, 16];
 const TASK_XP = 15; // per completed daily task
 const ALL_DAILY_XP = 50; // bonus for completing all daily tasks
 const XP_PER_LEVEL = 100;
 
 interface SolveResult {
   difficulty: Difficulty;
+  size: number;
   mode: "classic" | "daily";
   elapsedSeconds: number;
   mistakes: number;
@@ -40,6 +44,8 @@ const ACHIEVEMENTS = [
   { id: "expert", title: "Эксперт", desc: "Реши уровень «Эксперт»" },
   { id: "labyrinth", title: "Картограф", desc: "Пройди «Лабиринт»" },
   { id: "abyss", title: "Бездна смотрит в ответ", desc: "Пройди «Бездну»" },
+  { id: "size_12", title: "Размах", desc: "Реши поле 12×12" },
+  { id: "size_16", title: "Гигант", desc: "Реши поле 16×16" },
   { id: "streak_7", title: "Неделя", desc: "Серия ежедневных — 7 дней" },
   { id: "streak_30", title: "Месяц подряд", desc: "Серия ежедневных — 30 дней" },
   { id: "marathon", title: "Марафон", desc: "Реши 50 судоку" },
@@ -175,6 +181,7 @@ sudokuRouter.post(
   wrap(async (req, res) => {
     const userId = req.auth!.userId;
     const difficulty: Difficulty = DIFFS.includes(req.body?.difficulty) ? req.body.difficulty : "medium";
+    const size: number = SIZES.includes(Number(req.body?.size)) ? Number(req.body.size) : 9;
     const mode: "classic" | "daily" = req.body?.mode === "daily" ? "daily" : "classic";
     const elapsedSeconds = Math.max(0, Math.min(36000, Math.floor(Number(req.body?.elapsedSeconds) || 0)));
     const mistakes = Math.max(0, Math.min(999, Math.floor(Number(req.body?.mistakes) || 0)));
@@ -182,20 +189,21 @@ sudokuRouter.post(
     const dailyDate = typeof req.body?.dailyDate === "string" ? req.body.dailyDate : null;
 
     const p = await getProfile(userId);
-    const result: SolveResult = { difficulty, mode, elapsedSeconds, mistakes, hintsUsed };
+    const result: SolveResult = { difficulty, size, mode, elapsedSeconds, mistakes, hintsUsed };
 
     // Base solve points
-    const base = BASE_POINTS[difficulty];
+    const base = Math.round(BASE_POINTS[difficulty] * (SIZE_FACTOR[size] ?? 1));
     const speedBonus = elapsedSeconds < 180 ? 10 : elapsedSeconds < 300 ? 5 : 0;
     const solvePoints = Math.max(Math.round(base / 3), base + speedBonus - mistakes * 2 - hintsUsed * 3);
 
-    // Best times
+    // Best times — у каждого размера поля свой рекорд
     let bestTimes: Record<string, number | null> = {};
     try {
       bestTimes = JSON.parse(p.bestTimesJson || "{}");
     } catch {}
-    const prevBest = bestTimes[difficulty];
-    bestTimes[difficulty] = prevBest == null ? elapsedSeconds : Math.min(prevBest, elapsedSeconds);
+    const recordKey = size === 9 ? difficulty : `${size}:${difficulty}`;
+    const prevBest = bestTimes[recordKey];
+    bestTimes[recordKey] = prevBest == null ? elapsedSeconds : Math.min(prevBest, elapsedSeconds);
 
     // Daily streak (+ best streak + streak bonus)
     let dailyStreak = p.dailyStreak;
@@ -286,6 +294,8 @@ sudokuRouter.post(
     if (difficulty === "expert") grant("expert");
     if (difficulty === "labyrinth") grant("labyrinth");
     if (difficulty === "abyss") grant("abyss");
+    if (size === 12) grant("size_12");
+    if (size === 16) grant("size_16");
     if (dailyStreak >= 7) grant("streak_7");
     if (dailyStreak >= 30) grant("streak_30");
     if (level >= 5) grant("level_5");
