@@ -86,6 +86,19 @@ http {
       proxy_buffering off;
     }
 
+    # The Mini App ("пульт") is built with an absolute base, so its HTML asks
+    # for /assets/... at the ROOT even though the app itself is served under
+    # /relay/. Without this the page loads and stays blank — HTML 200, JS 404.
+    # Nothing else in this container claims /assets/ (the GamePass frontend is
+    # on Vercel), so routing it to the relay is unambiguous.
+    location /assets/ {
+      proxy_pass http://relay/assets/;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     # --- summarizer -----------------------------------------------------
     location /transcriber/ {
       proxy_pass http://transcriber/;
