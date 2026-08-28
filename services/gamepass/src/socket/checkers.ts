@@ -8,6 +8,7 @@ import {
   hasAnyMove,
   initialBoard,
 } from "../checkers/engine";
+import { Room, RoomRegistry } from "../multiplayer/rooms";
 
 interface AuthedSocket extends Socket {
   data: {
@@ -16,68 +17,65 @@ interface AuthedSocket extends Socket {
   };
 }
 
-interface CheckersGame {
-  id: string;
+/** Чисто игровое состояние: участники и присутствие живут в ядре комнат. */
+interface CheckersState {
   board: Board;
   turn: Color;
   chainFrom: number | null;
   status: "WAITING" | "ACTIVE" | "FINISHED";
   winner: Color | "draw" | null;
-  players: {
-    w: number;
-    b: number | null;
-  };
-  createdAt: number;
-  updatedAt: number;
 }
 
-const games = new Map<string, CheckersGame>();
-const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-const room = (id: string) => `checkers:${id}`;
 const other = (color: Color): Color => (color === "w" ? "b" : "w");
 
-function makeId(): string {
-  for (let tries = 0; tries < 20; tries += 1) {
-    let id = "CK";
-    for (let i = 0; i < 4; i += 1) id += alphabet[Math.floor(Math.random() * alphabet.length)];
-    if (!games.has(id)) return id;
-  }
-  return `CK${Date.now().toString(36).slice(-5).toUpperCase()}`;
+const registry = new RoomRegistry<CheckersState>({
+  channel: "checkers",
+  idPrefix: "CK",
+  seatOrder: ["w", "b"],
+  onSeatAbandoned: (room, seat) => {
+    // Игрок не вернулся за отведённое время — партия останавливается и ждёт замены.
+    if (room.state.status !== "ACTIVE") return;
+    room.state.status = "WAITING";
+    void seat;
+  },
+});
+
+function initialState(): CheckersState {
+  return { board: initialBoard(), turn: "w", chainFrom: null, status: "WAITING", winner: null };
 }
 
-function publicGame(game: CheckersGame) {
+function publicGame(room: Room<CheckersState>) {
   return {
-    id: game.id,
-    board: game.board,
-    turn: game.turn,
-    chainFrom: game.chainFrom,
-    status: game.status,
-    winner: game.winner,
-    players: game.players,
+    id: room.id,
+    board: room.state.board,
+    turn: room.state.turn,
+    chainFrom: room.state.chainFrom,
+    status: room.state.status,
+    winner: room.state.winner,
+    players: {
+      w: room.seats.get("w") ?? null,
+      b: room.seats.get("b") ?? null,
+    },
+    presence: registry.presence(room),
+    hasPassword: registry.hasPassword(room),
   };
 }
 
-function playerColor(game: CheckersGame, userId: number): Color | null {
-  if (game.players.w === userId) return "w";
-  if (game.players.b === userId) return "b";
-  return null;
+function emitState(io: IOServer, room: Room<CheckersState>): void {
+  io.to(registry.roomName(room.id)).emit("CHECKERS_STATE", { game: publicGame(room) });
 }
 
-function emitState(io: IOServer, game: CheckersGame): void {
-  io.to(room(game.id)).emit("CHECKERS_STATE", { game: publicGame(game) });
-}
-
-function finishIfNeeded(game: CheckersGame): void {
-  if (game.status === "FINISHED") return;
-  if (!hasAnyMove(game.board, game.turn)) {
-    game.status = "FINISHED";
-    game.winner = other(game.turn);
+function finishIfNeeded(state: CheckersState): void {
+  if (state.status !== "ACTIVE") return;
+  if (!hasAnyMove(state.board, state.turn)) {
+    state.status = "FINISHED";
+    state.winner = other(state.turn);
   }
 }
 
-function validateMove(game: CheckersGame, color: Color, move: Move): Move | null {
-  if (game.chainFrom !== null && move.from !== game.chainFrom) return null;
-  return allLegalMoves(game.board, color).find(
+function validateMove(state: CheckersState, color: Color, move: Move): Move | null {
+  if (state.chainFrom !== null && move.from !== state.chainFrom) return null;
+  return allLegalMoves(state.board, color).find(
     (candidate) =>
       candidate.from === move.from &&
       candidate.to === move.to &&
@@ -90,106 +88,94 @@ export function registerCheckersSocket(io: IOServer): void {
     const socket = raw as AuthedSocket;
     const userId = socket.data.userId;
 
-    socket.on("CHECKERS_CREATE", (_payload, ack) => {
-      const id = makeId();
-      const game: CheckersGame = {
-        id,
-        board: initialBoard(),
-        turn: "w",
-        chainFrom: null,
-        status: "WAITING",
-        winner: null,
-        players: { w: userId, b: null },
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-      games.set(id, game);
-      socket.join(room(id));
-      socket.emit("CHECKERS_STATE", { game: publicGame(game) });
-      ack?.({ ok: true, game: publicGame(game) });
+    socket.on("CHECKERS_CREATE", ({ password }: { password?: string } = {}, ack) => {
+      const room = registry.create(userId, initialState(), password);
+      registry.join(room.id, userId, socket);
+      socket.emit("CHECKERS_STATE", { game: publicGame(room) });
+      ack?.({ ok: true, game: publicGame(room) });
     });
 
-    socket.on("CHECKERS_JOIN", ({ gameId }: { gameId: string }, ack) => {
-      const id = String(gameId || "").trim().toUpperCase();
-      const game = games.get(id);
-      if (!game) {
+    socket.on(
+      "CHECKERS_JOIN",
+      ({ gameId, password }: { gameId: string; password?: string }, ack) => {
+      const result = registry.join(gameId, userId, socket, password);
+      if (!result) {
         ack?.({ ok: false, error: "game not found" });
         return socket.emit("CHECKERS_ERROR", { message: "Игра не найдена" });
       }
-
-      const color = playerColor(game, userId);
-      if (!color) {
-        if (game.players.b === null) {
-          game.players.b = userId;
-          game.status = "ACTIVE";
-          game.updatedAt = Date.now();
-        } else {
-          ack?.({ ok: false, error: "game full" });
-          return socket.emit("CHECKERS_ERROR", { message: "Игра уже заполнена" });
-        }
+      const { room, seat, reconnected } = result;
+      if (result.error === "wrong_password") {
+        ack?.({ ok: false, error: "wrong password" });
+        return socket.emit("CHECKERS_ERROR", { message: "Неверный пароль" });
+      }
+      if (!seat) {
+        ack?.({ ok: false, error: "game full" });
+        return socket.emit("CHECKERS_ERROR", { message: "Игра уже заполнена" });
       }
 
-      socket.join(room(id));
-      emitState(io, game);
-      ack?.({ ok: true, game: publicGame(game) });
-    });
+      if (room.state.status === "WAITING" && registry.occupiedSeats(room).length === 2) {
+        room.state.status = "ACTIVE";
+      }
+      registry.touch(room);
+      emitState(io, room);
+      ack?.({ ok: true, game: publicGame(room), reconnected });
+    },
+    );
 
     socket.on("CHECKERS_MOVE", ({ gameId, move }: { gameId: string; move: Move }, ack) => {
-      const game = games.get(String(gameId || "").trim().toUpperCase());
-      if (!game) {
+      const room = registry.get(gameId);
+      if (!room) {
         ack?.({ ok: false, error: "game not found" });
         return socket.emit("CHECKERS_ERROR", { message: "Игра не найдена" });
       }
-      if (game.status !== "ACTIVE") {
+      if (room.state.status !== "ACTIVE") {
         ack?.({ ok: false, error: "game not active" });
         return socket.emit("CHECKERS_ERROR", { message: "Игра ещё не активна" });
       }
 
-      const color = playerColor(game, userId);
-      if (!color || color !== game.turn) {
+      const color = registry.seatOf(room, userId) as Color | null;
+      if (!color || color !== room.state.turn) {
         ack?.({ ok: false, error: "not your turn" });
         return socket.emit("CHECKERS_ERROR", { message: "Сейчас не твой ход" });
       }
 
-      const legal = validateMove(game, color, move);
+      const legal = validateMove(room.state, color, move);
       if (!legal) {
         ack?.({ ok: false, error: "illegal move" });
         return socket.emit("CHECKERS_ERROR", { message: "Нельзя так ходить" });
       }
 
-      const result = applyMove(game.board, legal.from, legal.to, legal.captured);
-      game.board = result.board;
-      game.updatedAt = Date.now();
+      const result = applyMove(room.state.board, legal.from, legal.to, legal.captured);
+      room.state.board = result.board;
       if (result.mustContinue) {
-        game.chainFrom = result.end;
+        room.state.chainFrom = result.end;
       } else {
-        game.chainFrom = null;
-        game.turn = other(game.turn);
+        room.state.chainFrom = null;
+        room.state.turn = other(room.state.turn);
       }
-      finishIfNeeded(game);
-      emitState(io, game);
-      ack?.({ ok: true, game: publicGame(game) });
+      finishIfNeeded(room.state);
+      registry.touch(room);
+      emitState(io, room);
+      ack?.({ ok: true, game: publicGame(room) });
     });
 
     socket.on("CHECKERS_RESTART", ({ gameId }: { gameId: string }, ack) => {
-      const game = games.get(String(gameId || "").trim().toUpperCase());
-      if (!game) return ack?.({ ok: false, error: "game not found" });
-      if (!playerColor(game, userId)) return ack?.({ ok: false, error: "not participant" });
-      game.board = initialBoard();
-      game.turn = "w";
-      game.chainFrom = null;
-      game.status = game.players.b === null ? "WAITING" : "ACTIVE";
-      game.winner = null;
-      game.updatedAt = Date.now();
-      emitState(io, game);
-      ack?.({ ok: true, game: publicGame(game) });
+      const room = registry.get(gameId);
+      if (!room) return ack?.({ ok: false, error: "game not found" });
+      if (!registry.seatOf(room, userId)) return ack?.({ ok: false, error: "not participant" });
+
+      const twoSeated = registry.occupiedSeats(room).length === 2;
+      room.state = initialState();
+      room.state.status = twoSeated ? "ACTIVE" : "WAITING";
+      registry.touch(room);
+      emitState(io, room);
+      ack?.({ ok: true, game: publicGame(room) });
+    });
+
+    socket.on("disconnect", () => {
+      registry.detach(userId, socket.id, io);
     });
   });
 
-  setInterval(() => {
-    const cutoff = Date.now() - 1000 * 60 * 60 * 6;
-    for (const [id, game] of games.entries()) {
-      if (game.updatedAt < cutoff) games.delete(id);
-    }
-  }, 1000 * 60 * 30).unref?.();
+  registry.startSweeper();
 }

@@ -14,15 +14,10 @@ primary_region = "fra"
 [http_service]
   internal_port = 3001
   force_https = true
-  # Suspend when idle instead of running 24/7 (~$3.19/mo for a machine nobody
-  # is playing on at 4am). "suspend" freezes the process image rather than
-  # killing it, so waking is sub-second — this is not a Render-style cold start,
-  # and the original "no cold-start DB timeouts" worry does not apply.
-  # A live socket.io match counts as traffic and keeps the machine up; it only
-  # suspends once no one is connected.
-  auto_stop_machines = "suspend"
+  # Keep the backend always-on: no sleep, so no cold-start DB timeouts.
+  auto_stop_machines = "off"
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
 [[vm]]
   size = "shared-cpu-1x"
