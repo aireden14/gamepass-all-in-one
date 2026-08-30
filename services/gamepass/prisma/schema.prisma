@@ -36,6 +36,39 @@ model User {
   sudokuProfile SudokuProfile? @relation("SudokuProfile")
 
   beatTracks    BeatTrack[]    @relation("BeatTracks")
+
+  trainingProfile TrainingProfile? @relation("TrainingProfile")
+}
+
+model TrainingProfile {
+  id              Int      @id @default(autoincrement())
+  userId          Int      @unique
+  user            User     @relation("TrainingProfile", fields: [userId], references: [id], onDelete: Cascade)
+  stateJson       String   @default("{}")
+  settingsJson    String   @default("{}")
+  lastReminderKey String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  sessions        TrainingSession[]
+}
+
+model TrainingSession {
+  id           String          @id @default(uuid())
+  profileId    Int
+  profile      TrainingProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  dateKey      String
+  mode         String
+  planJson     String
+  actualJson   String
+  totalPlanned Int
+  totalActual  Int
+  completedAt  DateTime        @default(now())
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@unique([profileId, dateKey])
+  @@index([profileId, completedAt])
 }
 
 model BeatTrack {
