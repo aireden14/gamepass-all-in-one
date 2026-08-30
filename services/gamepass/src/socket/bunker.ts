@@ -30,7 +30,7 @@ const registry = new RoomRegistry<BunkerState>({
   channel: "bunker",
   idPrefix: "BK",
   capacity: MAX_PLAYERS,
-  onSeatAbandoned: (room, _seat, userId) => {
+  onSeatAbandoned: (room, _seat, userId, io) => {
     // Игрок не вернулся за отведённое время: в лобби убираем совсем,
     // в идущей партии оставляем в составе — иначе развалится расклад карт.
     if (room.state.phase !== "lobby") return;
@@ -38,6 +38,7 @@ const registry = new RoomRegistry<BunkerState>({
     if (room.state.hostId === userId && room.state.players.length > 0) {
       room.state.hostId = room.state.players[0].userId;
     }
+    emitState(io, room);
   },
 });
 

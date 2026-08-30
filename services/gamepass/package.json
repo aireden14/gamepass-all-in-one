@@ -15,7 +15,8 @@
     "bunker:selfplay": "tsx scripts/bunker-selfplay.ts",
     "tabletop:selfplay": "tsx scripts/tabletop-selfplay.ts",
     "bunker:e2e": "tsx scripts/bunker-e2e.ts",
-    "catan:e2e": "tsx scripts/catan-e2e.ts"
+    "catan:e2e": "tsx scripts/catan-e2e.ts",
+    "sudoku:duel:e2e": "tsx scripts/sudoku-duel-e2e.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",

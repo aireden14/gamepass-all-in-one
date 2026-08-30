@@ -70,7 +70,7 @@ const registry = new RoomRegistry<TabletopState>({
   channel: "tabletop",
   idPrefix: "TT",
   capacity: MAX_SEATS,
-  onSeatAbandoned: (room, _seat, userId) => {
+  onSeatAbandoned: (room, _seat, userId, io) => {
     const state = room.state;
     if (state.phase === "lobby") {
       state.players = state.players.filter((p) => p.userId !== userId);
@@ -82,6 +82,7 @@ const registry = new RoomRegistry<TabletopState>({
       );
       if (heir) state.hostId = heir.userId;
     }
+    emitState(io, room);
   },
 });
 

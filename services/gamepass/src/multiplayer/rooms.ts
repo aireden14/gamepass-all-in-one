@@ -4,7 +4,11 @@
 import { Server as IOServer, Socket } from "socket.io";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
-export const DEFAULT_GRACE_MS = 2 * 60 * 1000; // держим место 2 минуты после обрыва
+// Держим место 2 минуты после обрыва. ROOM_GRACE_MS укорачивает окно в тестах —
+// иначе каждую проверку ухода игрока пришлось бы ждать две минуты.
+export const DEFAULT_GRACE_MS = Number(process.env.ROOM_GRACE_MS) > 0
+  ? Number(process.env.ROOM_GRACE_MS)
+  : 2 * 60 * 1000;
 const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
 const SWEEP_MS = 30 * 60 * 1000;
 const ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -47,8 +51,12 @@ export interface RoomRegistryOptions<TState> {
   capacity?: number;
   graceMs?: number;
   ttlMs?: number;
-  /** место освободилось: игрок не вернулся за отведённое время */
-  onSeatAbandoned?: (room: Room<TState>, seat: SeatId, userId: number) => void;
+  /**
+   * Место освободилось: игрок не вернулся за отведённое время.
+   * io передаётся, чтобы игра могла разослать новое состояние — иначе клиенты
+   * продолжат показывать партию, которой на сервере уже нет.
+   */
+  onSeatAbandoned?: (room: Room<TState>, seat: SeatId, userId: number, io: IOServer) => void;
 }
 
 export type JoinError = "wrong_password";
@@ -269,7 +277,7 @@ export class RoomRegistry<TState> {
       if (room.connections.has(userId)) return; // успел вернуться
       room.seats.set(seat, null);
       room.updatedAt = Date.now();
-      this.options.onSeatAbandoned?.(room, seat, userId);
+      this.options.onSeatAbandoned?.(room, seat, userId, io);
       io.to(this.roomName(room.id)).emit("ROOM_SEAT_ABANDONED", { roomId: room.id, seat });
     }, this.graceMs);
     timer.unref?.();

@@ -16,6 +16,7 @@ import { registerCheckersSocket } from "./checkers";
 import { registerBunkerSocket } from "./bunker";
 import { registerCatanSocket } from "./catan";
 import { registerTabletopSocket } from "./tabletop";
+import { registerSudokuDuelSocket } from "./sudokuDuel";
 
 let io: IOServer | null = null;
 export function getIO() {
@@ -283,6 +284,7 @@ export function initSocket(httpServer: HttpServer, _frontendUrl: string) {
   registerBunkerSocket(io);
   registerCatanSocket(io);
   registerTabletopSocket(io);
+  registerSudokuDuelSocket(io);
 
   return io;
 }
