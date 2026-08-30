@@ -63,6 +63,9 @@ model TrainingSession {
   actualJson   String
   totalPlanned Int
   totalActual  Int
+  goalCompleted Boolean         @default(false)
+  recordProgressApplied Boolean @default(false)
+  recordProgressJson String @default("[]")
   completedAt  DateTime        @default(now())
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt

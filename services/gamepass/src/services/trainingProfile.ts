@@ -23,6 +23,7 @@ export async function ensureTrainingProfile(userId: number) {
 
   const isDenrech = isDenrechUsername(user.username);
   let profile = await prisma.trainingProfile.findUnique({ where: { userId } });
+  let created = false;
   if (!profile) {
     try {
       profile = await prisma.trainingProfile.create({
@@ -32,6 +33,7 @@ export async function ensureTrainingProfile(userId: number) {
           settingsJson: JSON.stringify(defaultTrainingSettings(isDenrech)),
         },
       });
+      created = true;
     } catch (error: any) {
       if (error?.code !== "P2002") throw error;
       profile = await prisma.trainingProfile.findUnique({ where: { userId } });
@@ -58,7 +60,7 @@ export async function ensureTrainingProfile(userId: number) {
     });
   }
 
-  if (isDenrech) await ensureDenrechBaseline(profile.id);
+  if (isDenrech && created) await ensureDenrechBaseline(profile.id);
   return { profile, user, state, settings, isDenrech };
 }
 
@@ -85,4 +87,3 @@ async function ensureDenrechBaseline(profileId: number) {
     },
   });
 }
-

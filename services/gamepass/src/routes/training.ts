@@ -67,6 +67,8 @@ async function dashboard(userId: number, requestedDate?: unknown) {
     actual: parseJson<TrainingExerciseSnapshot[]>(row.actualJson, []),
     totalPlanned: row.totalPlanned,
     totalActual: row.totalActual,
+    goalCompleted: row.goalCompleted,
+    recordProgressApplied: row.recordProgressApplied,
     completedAt: row.completedAt.toISOString(),
   }));
   const streaks = computeStreaks(history.map((item) => item.dateKey), dateKey);
@@ -81,7 +83,7 @@ async function dashboard(userId: number, requestedDate?: unknown) {
       ...streaks,
       totalWorkouts: history.length,
       totalReps: history.reduce((sum, item) => sum + item.totalActual, 0),
-      recordWorkouts: history.filter((item) => item.mode === "record").length,
+      recordWorkouts: history.filter((item) => item.recordProgressApplied).length,
     },
     remindersPrivate: isDenrech,
   };
@@ -145,10 +147,14 @@ trainingRouter.post(
       (sum, exercise) => sum + exercise.actualSets.reduce((inner, reps) => inner + reps, 0),
       0,
     );
-    if (totalPlanned <= 0 || totalActual < totalPlanned) {
-      res.status(400).json({ error: "workout is not complete" });
+    if (totalPlanned <= 0 || totalActual <= 0) {
+      res.status(400).json({ error: "empty workout" });
       return;
     }
+    const goalCompleted = snapshots.every(
+      (exercise) => exercise.actualSets.reduce((sum, reps) => sum + reps, 0)
+        >= exercise.plannedSets.reduce((sum, reps) => sum + reps, 0),
+    );
 
     const ensured = await ensureTrainingProfile(userId);
     const allowed = new Set(ensured.state.exercises.map((exercise) => exercise.id));
@@ -161,6 +167,42 @@ trainingRouter.post(
       const existing = await tx.trainingSession.findUnique({
         where: { profileId_dateKey: { profileId: ensured.profile.id, dateKey } },
       });
+      const previousProgress = existing
+        ? parseJson<Array<{ exerciseId: string; previousTarget: number }>>(existing.recordProgressJson, [])
+        : [];
+      const shouldApplyProgress = mode === "record" && goalCompleted;
+      let recordProgress = previousProgress;
+      let nextState = ensured.state;
+
+      if (previousProgress.length > 0 && !shouldApplyProgress) {
+        const previousById = new Map(previousProgress.map((item) => [item.exerciseId, item.previousTarget]));
+        nextState = {
+          ...nextState,
+          exercises: nextState.exercises.map((exercise) => previousById.has(exercise.id)
+            ? { ...exercise, recordTarget: previousById.get(exercise.id)! }
+            : exercise),
+        };
+        recordProgress = [];
+      } else if (previousProgress.length === 0 && shouldApplyProgress) {
+        const completedIds = new Set(snapshots.map((item) => item.exerciseId));
+        recordProgress = nextState.exercises
+          .filter((exercise) => completedIds.has(exercise.id)
+            && (exercise.recordCap == null || exercise.recordTarget < exercise.recordCap))
+          .map((exercise) => ({ exerciseId: exercise.id, previousTarget: exercise.recordTarget }));
+        const progressIds = new Set(recordProgress.map((item) => item.exerciseId));
+        nextState = {
+          ...nextState,
+          exercises: nextState.exercises.map((exercise) => {
+            if (!progressIds.has(exercise.id)) return exercise;
+            const next = exercise.recordTarget + exercise.recordStep;
+            return {
+              ...exercise,
+              recordTarget: exercise.recordCap == null ? next : Math.min(next, exercise.recordCap),
+            };
+          }),
+        };
+      }
+
       await tx.trainingSession.upsert({
         where: { profileId_dateKey: { profileId: ensured.profile.id, dateKey } },
         update: {
@@ -169,6 +211,9 @@ trainingRouter.post(
           actualJson: JSON.stringify(snapshots),
           totalPlanned,
           totalActual,
+          goalCompleted,
+          recordProgressApplied: recordProgress.length > 0,
+          recordProgressJson: JSON.stringify(recordProgress),
           completedAt: new Date(),
         },
         create: {
@@ -179,22 +224,13 @@ trainingRouter.post(
           actualJson: JSON.stringify(snapshots),
           totalPlanned,
           totalActual,
+          goalCompleted,
+          recordProgressApplied: recordProgress.length > 0,
+          recordProgressJson: JSON.stringify(recordProgress),
         },
       });
 
-      if (!existing && mode === "record") {
-        const completedIds = new Set(snapshots.map((item) => item.exerciseId));
-        const nextState: TrainingState = {
-          ...ensured.state,
-          exercises: ensured.state.exercises.map((exercise) => {
-            if (!completedIds.has(exercise.id)) return exercise;
-            const next = exercise.recordTarget + exercise.recordStep;
-            return {
-              ...exercise,
-              recordTarget: exercise.recordCap == null ? next : Math.min(next, exercise.recordCap),
-            };
-          }),
-        };
+      if (JSON.stringify(nextState) !== JSON.stringify(ensured.state)) {
         await tx.trainingProfile.update({
           where: { id: ensured.profile.id },
           data: { stateJson: JSON.stringify(nextState) },
@@ -206,3 +242,41 @@ trainingRouter.post(
   }),
 );
 
+trainingRouter.delete(
+  "/day/:dateKey",
+  authMiddleware,
+  wrap(async (req, res) => {
+    const userId = req.auth!.userId;
+    const dateKey = req.params.dateKey;
+    if (!isValidDateKey(dateKey)) {
+      res.status(400).json({ error: "bad dateKey" });
+      return;
+    }
+    const ensured = await ensureTrainingProfile(userId);
+    await prisma.$transaction(async (tx) => {
+      const existing = await tx.trainingSession.findUnique({
+        where: { profileId_dateKey: { profileId: ensured.profile.id, dateKey } },
+      });
+      if (!existing) return;
+      const previousProgress = parseJson<Array<{ exerciseId: string; previousTarget: number }>>(
+        existing.recordProgressJson,
+        [],
+      );
+      if (previousProgress.length > 0) {
+        const previousById = new Map(previousProgress.map((item) => [item.exerciseId, item.previousTarget]));
+        const nextState: TrainingState = {
+          ...ensured.state,
+          exercises: ensured.state.exercises.map((exercise) => previousById.has(exercise.id)
+            ? { ...exercise, recordTarget: previousById.get(exercise.id)! }
+            : exercise),
+        };
+        await tx.trainingProfile.update({
+          where: { id: ensured.profile.id },
+          data: { stateJson: JSON.stringify(nextState) },
+        });
+      }
+      await tx.trainingSession.delete({ where: { id: existing.id } });
+    });
+    res.json(await dashboard(userId, dateKey));
+  }),
+);
