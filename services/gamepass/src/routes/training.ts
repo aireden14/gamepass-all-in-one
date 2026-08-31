@@ -105,8 +105,7 @@ trainingRouter.patch(
     const ensured = await ensureTrainingProfile(userId);
     const state = sanitizeTrainingState(req.body?.state, ensured.state);
     const settings = sanitizeTrainingSettings(req.body?.settings, ensured.settings);
-    // Hourly bot messages are deliberately limited to the owner in this release.
-    if (!ensured.isDenrech) settings.reminderEnabled = false;
+    settings.reminderEnabled = false;
     await prisma.trainingProfile.update({
       where: { id: ensured.profile.id },
       data: {

@@ -51,6 +51,7 @@ export async function ensureTrainingProfile(userId: number) {
     parseJson<TrainingSettings>(profile.settingsJson, fallbackSettings),
     fallbackSettings,
   );
+  settings.reminderEnabled = false;
   const normalizedStateJson = JSON.stringify(state);
   const normalizedSettingsJson = JSON.stringify(settings);
   if (profile.stateJson !== normalizedStateJson || profile.settingsJson !== normalizedSettingsJson) {

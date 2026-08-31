@@ -10,7 +10,6 @@ import { beatsRouter } from "./routes/beats";
 import { catanRouter } from "./routes/catan";
 import { telegramWebhookRouter } from "./routes/telegramWebhook";
 import { trainingRouter } from "./routes/training";
-import { startTrainingReminderScheduler } from "./services/trainingReminders";
 import { prisma } from "./utils/prisma";
 import { initSocket, startTimerWatchdog } from "./socket";
 
@@ -49,7 +48,6 @@ const port = Number(process.env.PORT || 3001);
 const httpServer = createServer(app);
 initSocket(httpServer, "");
 startTimerWatchdog();
-startTrainingReminderScheduler();
 
 httpServer.listen(port, () => {
   console.log(`[chess] backend on :${port}`);

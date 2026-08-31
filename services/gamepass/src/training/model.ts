@@ -70,9 +70,9 @@ export function defaultTrainingState(isDenrech: boolean): TrainingState {
   };
 }
 
-export function defaultTrainingSettings(isDenrech: boolean): TrainingSettings {
+export function defaultTrainingSettings(_isDenrech: boolean): TrainingSettings {
   return {
-    reminderEnabled: isDenrech,
+    reminderEnabled: false,
     reminderStartHour: 9,
     reminderEndHour: 23,
     reminderTimezone: "Asia/Nicosia",
