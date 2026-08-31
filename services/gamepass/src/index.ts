@@ -10,6 +10,8 @@ import { beatsRouter } from "./routes/beats";
 import { catanRouter } from "./routes/catan";
 import { telegramWebhookRouter } from "./routes/telegramWebhook";
 import { trainingRouter } from "./routes/training";
+import { burpiRemindersRouter } from "./routes/burpiReminders";
+import { startBurpiReminderScheduler } from "./services/burpiReminders";
 import { prisma } from "./utils/prisma";
 import { initSocket, startTimerWatchdog } from "./socket";
 
@@ -38,6 +40,7 @@ app.use("/api/beats", beatsRouter);
 app.use("/api/catan", catanRouter);
 app.use("/api/telegram", telegramWebhookRouter);
 app.use("/api/training", trainingRouter);
+app.use("/api/burpi-reminders", burpiRemindersRouter);
 
 app.use((err: any, _req: any, res: any, _next: any) => {
   console.error("[express error]", err);
@@ -48,6 +51,7 @@ const port = Number(process.env.PORT || 3001);
 const httpServer = createServer(app);
 initSocket(httpServer, "");
 startTimerWatchdog();
+startBurpiReminderScheduler();
 
 httpServer.listen(port, () => {
   console.log(`[chess] backend on :${port}`);
