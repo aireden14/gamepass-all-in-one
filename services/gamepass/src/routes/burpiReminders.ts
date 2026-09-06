@@ -18,7 +18,9 @@ burpiRemindersRouter.post("/complete", authMiddleware, async (req: AuthedRequest
     res.status(403).json({ error: "private reminder" });
     return;
   }
-  const completedDateKey = dateKeyInTimezone("Asia/Nicosia");
+  const completedDateKey = typeof req.body?.dateKey === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.body.dateKey)
+    ? req.body.dateKey
+    : dateKeyInTimezone("Asia/Nicosia", new Date(Date.now() - 5 * 3600 * 1000));
   await prisma.burpiReminder.upsert({
     where: { userId: user.id },
     update: { completedDateKey },

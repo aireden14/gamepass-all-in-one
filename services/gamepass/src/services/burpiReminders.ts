@@ -16,7 +16,7 @@ async function checkBurpiReminder() {
     const now = new Date();
     const hour = hourInTimezone(TIMEZONE, now);
     if (hour < START_HOUR) return;
-    const dateKey = dateKeyInTimezone(TIMEZONE, now);
+    const dateKey = dateKeyInTimezone(TIMEZONE, new Date(now.getTime() - 5 * 3600 * 1000));
     const reminderKey = `${dateKey}:${String(hour).padStart(2, "0")}`;
     const state = await prisma.burpiReminder.findUnique({ where: { userId: user.id } });
     if (state?.completedDateKey === dateKey || state?.lastReminderKey === reminderKey) return;
