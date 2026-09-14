@@ -94,6 +94,13 @@ model BurpiPairCode {
   createdAt DateTime @default(now())
 }
 
+// Неудачные попытки привязки часов — для разбора, сам код не хранится.
+model BurpiPairMiss {
+  id        Int      @id @default(autoincrement())
+  info      String
+  createdAt DateTime @default(now())
+}
+
 model TrainingProfile {
   id              Int      @id @default(autoincrement())
   userId          Int      @unique

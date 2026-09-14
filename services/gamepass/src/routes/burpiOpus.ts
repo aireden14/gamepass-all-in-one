@@ -235,12 +235,18 @@ burpiOpusRouter.post("/pair", async (req: Request, res: Response) => {
 
   const code = typeof req.body?.code === "string" ? req.body.code.trim() : "";
   if (!/^\d{6}$/.test(code)) {
+    const info = `bad body type=${typeof req.body?.code} len=${code.length} ctype=${req.headers["content-type"] || ""}`;
+    await prisma.burpiPairMiss.create({ data: { info } }).catch(() => undefined);
     noteFailure(ip);
     return res.status(400).json({ error: "bad code" });
   }
 
   const row = await prisma.burpiPairCode.findUnique({ where: { code } });
   if (!row || row.expiresAt.getTime() < Date.now()) {
+    // Для разбора неудачных привязок: сам код не пишем, только его форму.
+    const live = await prisma.burpiPairCode.count({ where: { expiresAt: { gt: new Date() } } });
+    const info = `code=${code.slice(0, 2)}**** len=${code.length} expired=${Boolean(row)} live=${live} ua=${String(req.headers["user-agent"] || "").slice(0, 80)}`;
+    await prisma.burpiPairMiss.create({ data: { info } }).catch(() => undefined);
     noteFailure(ip);
     return res.status(404).json({ error: "code not found" });
   }
