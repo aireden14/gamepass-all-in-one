@@ -282,3 +282,186 @@ burpiOpusRouter.delete("/watch-links", callerAuth, webOnly, async (req: BurpiReq
   const { count } = await prisma.burpiWatchLink.deleteMany({ where: { userId: req.caller!.userId } });
   res.json({ ok: true, removed: count });
 });
+
+/* ------------------------------------------------------ пульт суфлёра */
+
+// Часы шлют команды, Суфлёр.app на Маке забирает их длинным опросом. Всё в
+// памяти процесса: команды живут секунды, после рестарта терять нечего.
+type RemoteCmd = { id: number; cmd: string; value: number; at: number };
+const REMOTE_CMDS = new Set(["toggle", "play", "pause", "speed", "scroll", "para", "top"]);
+const REMOTE_TTL_MS = 30_000;
+const REMOTE_POLL_MS = 20_000;
+const remoteQueues = new Map<number, RemoteCmd[]>();
+const remoteWaiters = new Map<number, Set<() => void>>();
+const remoteStates = new Map<number, { speed: number; playing: boolean; title: string; at: number }>();
+let remoteSeq = 0;
+
+function remoteFresh(userId: number) {
+  const now = Date.now();
+  const queue = (remoteQueues.get(userId) || []).filter((c) => now - c.at < REMOTE_TTL_MS);
+  remoteQueues.set(userId, queue);
+  return queue;
+}
+
+// POST /api/burpi-opus/remote — { cmd, value? } с часов.
+burpiOpusRouter.post("/remote", callerAuth, (req: BurpiRequest, res: Response) => {
+  const userId = req.caller!.userId;
+  const cmd = String(req.body?.cmd || "");
+  if (!REMOTE_CMDS.has(cmd)) return res.status(400).json({ error: "bad cmd" });
+  const raw = Number(req.body?.value);
+  const value = Number.isFinite(raw) ? Math.max(-5000, Math.min(5000, raw)) : 0;
+  const queue = remoteFresh(userId);
+  queue.push({ id: ++remoteSeq, cmd, value, at: Date.now() });
+  if (queue.length > 50) queue.splice(0, queue.length - 50);
+  remoteWaiters.get(userId)?.forEach((wake) => wake());
+  res.json({ ok: true, mac: remoteStates.has(userId) && Date.now() - remoteStates.get(userId)!.at < 60_000 });
+});
+
+// GET /api/burpi-opus/remote/poll?after=<id> — Суфлёр ждёт команды до 20 с.
+burpiOpusRouter.get("/remote/poll", callerAuth, (req: BurpiRequest, res: Response) => {
+  const userId = req.caller!.userId;
+  const after = Number(req.query.after) || 0;
+  const pick = () => remoteFresh(userId).filter((c) => c.id > after);
+  const ready = pick();
+  if (ready.length) return res.json({ cmds: ready, last: ready[ready.length - 1].id });
+
+  const waiters = remoteWaiters.get(userId) || new Set<() => void>();
+  remoteWaiters.set(userId, waiters);
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    waiters.delete(finish);
+    const cmds = pick();
+    res.json({ cmds, last: cmds.length ? cmds[cmds.length - 1].id : Math.max(after, remoteSeq) });
+  };
+  const timer = setTimeout(finish, REMOTE_POLL_MS);
+  waiters.add(finish);
+  req.on("close", () => {
+    done = true;
+    clearTimeout(timer);
+    waiters.delete(finish);
+  });
+});
+
+// POST /api/burpi-opus/remote/state — Суфлёр сообщает скорость и что открыто.
+burpiOpusRouter.post("/remote/state", callerAuth, (req: BurpiRequest, res: Response) => {
+  const speed = Math.max(1, Math.min(100, Number(req.body?.speed) || 22));
+  const playing = req.body?.playing === true;
+  const title = String(req.body?.title || "").slice(0, 80);
+  remoteStates.set(req.caller!.userId, { speed, playing, title, at: Date.now() });
+  res.json({ ok: true });
+});
+
+// GET /api/burpi-opus/remote/state — часы узнают, на связи ли Мак.
+burpiOpusRouter.get("/remote/state", callerAuth, (req: BurpiRequest, res: Response) => {
+  const state = remoteStates.get(req.caller!.userId);
+  const online = !!state && Date.now() - state.at < 60_000;
+  res.json({ online, speed: state?.speed ?? 22, playing: state?.playing ?? false, title: state?.title ?? "" });
+});
+
+/* ------------------------------------------------------------ друзья */
+
+const FRIEND_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+// Сутки BurpiOpus начинаются в 05:00; пояс друзей почти всегда Кипр — берём его.
+function burpiDayKey(offsetDays = 0) {
+  const shifted = new Date(Date.now() - 5 * 3600_000 + offsetDays * 86_400_000);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Nicosia" }).format(shifted);
+}
+
+async function friendCodeFor(userId: number) {
+  const existing = await prisma.burpiFriendCode.findUnique({ where: { userId } });
+  if (existing) return existing.code;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const code = Array.from(crypto.randomBytes(6), (b) => FRIEND_ALPHABET[b % FRIEND_ALPHABET.length]).join("");
+    const taken = await prisma.burpiFriendCode.findUnique({ where: { code } });
+    if (taken) continue;
+    await prisma.burpiFriendCode.create({ data: { code, userId } });
+    return code;
+  }
+  throw new Error("friend code");
+}
+
+async function weekSummary(userId: number) {
+  const since = burpiDayKey(-6);
+  const today = burpiDayKey();
+  const rows = await prisma.burpiOpusEntry.findMany({
+    where: { userId, deleted: false, dayKey: { gte: since } },
+    select: { dataJson: true, dayKey: true },
+  });
+  let week = 0;
+  let todayReps = 0;
+  let doneToday = false;
+  for (const row of rows) {
+    const data = parseJson(row.dataJson) as { doneTotal?: unknown; done?: unknown; goalReached?: unknown } | null;
+    if (!data) continue;
+    const reps = typeof data.doneTotal === "number"
+      ? data.doneTotal
+      : Array.isArray(data.done) ? data.done.reduce((s: number, n: unknown) => s + (typeof n === "number" ? n : 0), 0) : 0;
+    week += reps;
+    if (row.dayKey === today) {
+      todayReps += reps;
+      if (data.goalReached === true) doneToday = true;
+    }
+  }
+  return { week, today: todayReps, doneToday };
+}
+
+// GET /api/burpi-opus/friends — мой код и недельный рейтинг (я + друзья).
+burpiOpusRouter.get("/friends", callerAuth, async (req: BurpiRequest, res: Response) => {
+  const userId = req.caller!.userId;
+  const code = await friendCodeFor(userId);
+  const links = await prisma.burpiFriend.findMany({ where: { userId }, select: { friendId: true } });
+  const ids = [userId, ...links.map((l) => l.friendId)];
+  const users = await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, firstName: true } });
+  const names = new Map(users.map((u) => [u.id, u.firstName]));
+  const board = await Promise.all(ids.map(async (id) => ({
+    id,
+    name: names.get(id) || "Друг",
+    me: id === userId,
+    ...(await weekSummary(id)),
+  })));
+  board.sort((a, b) => b.week - a.week);
+  res.json({ code, board });
+});
+
+// POST /api/burpi-opus/friends — { code } добавить друга (взаимно).
+burpiOpusRouter.post("/friends", callerAuth, async (req: BurpiRequest, res: Response) => {
+  const userId = req.caller!.userId;
+  const ip = clientIp(req);
+  if (isThrottled(ip)) return res.status(429).json({ error: "too many attempts" });
+  const code = String(req.body?.code || "").trim().toUpperCase();
+  const row = /^[A-Z0-9]{6}$/.test(code) ? await prisma.burpiFriendCode.findUnique({ where: { code } }) : null;
+  if (!row) {
+    noteFailure(ip);
+    return res.status(404).json({ error: "code not found" });
+  }
+  if (row.userId === userId) return res.status(400).json({ error: "own code" });
+  await prisma.$transaction([
+    prisma.burpiFriend.upsert({
+      where: { userId_friendId: { userId, friendId: row.userId } },
+      update: {},
+      create: { userId, friendId: row.userId },
+    }),
+    prisma.burpiFriend.upsert({
+      where: { userId_friendId: { userId: row.userId, friendId: userId } },
+      update: {},
+      create: { userId: row.userId, friendId: userId },
+    }),
+  ]);
+  const friend = await prisma.user.findUnique({ where: { id: row.userId }, select: { firstName: true } });
+  res.json({ ok: true, name: friend?.firstName ?? "" });
+});
+
+// DELETE /api/burpi-opus/friends/:id — убрать друга (с обеих сторон).
+burpiOpusRouter.delete("/friends/:id", callerAuth, async (req: BurpiRequest, res: Response) => {
+  const userId = req.caller!.userId;
+  const friendId = Number(req.params.id);
+  if (!Number.isInteger(friendId)) return res.status(400).json({ error: "bad id" });
+  await prisma.burpiFriend.deleteMany({
+    where: { OR: [{ userId, friendId }, { userId: friendId, friendId: userId }] },
+  });
+  res.json({ ok: true });
+});

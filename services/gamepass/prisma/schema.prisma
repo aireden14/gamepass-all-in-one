@@ -94,6 +94,23 @@ model BurpiPairCode {
   createdAt DateTime @default(now())
 }
 
+// Друзья BurpiOpus: постоянный код-приглашение и взаимные пары.
+model BurpiFriendCode {
+  code      String   @id
+  userId    Int      @unique
+  createdAt DateTime @default(now())
+}
+
+model BurpiFriend {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  friendId  Int
+  createdAt DateTime @default(now())
+
+  @@unique([userId, friendId])
+  @@index([userId])
+}
+
 // Неудачные попытки привязки часов — для разбора, сам код не хранится.
 model BurpiPairMiss {
   id        Int      @id @default(autoincrement())
