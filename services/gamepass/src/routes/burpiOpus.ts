@@ -320,7 +320,10 @@ burpiOpusRouter.post("/remote", callerAuth, (req: BurpiRequest, res: Response) =
 // GET /api/burpi-opus/remote/poll?after=<id> — Суфлёр ждёт команды до 20 с.
 burpiOpusRouter.get("/remote/poll", callerAuth, (req: BurpiRequest, res: Response) => {
   const userId = req.caller!.userId;
-  const after = Number(req.query.after) || 0;
+  // После рестарта сервера счёт команд начинается заново — курсор из будущего
+  // сбрасываем, иначе Суфлёр не увидит ни одной новой команды.
+  const requested = Number(req.query.after) || 0;
+  const after = requested > remoteSeq ? 0 : requested;
   const pick = () => remoteFresh(userId).filter((c) => c.id > after);
   const ready = pick();
   if (ready.length) return res.json({ cmds: ready, last: ready[ready.length - 1].id });
