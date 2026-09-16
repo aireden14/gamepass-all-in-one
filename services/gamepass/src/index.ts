@@ -12,6 +12,7 @@ import { telegramWebhookRouter } from "./routes/telegramWebhook";
 import { trainingRouter } from "./routes/training";
 import { burpiRemindersRouter } from "./routes/burpiReminders";
 import { burpiOpusRouter } from "./routes/burpiOpus";
+import { chitopusRouter } from "./routes/chitopus";
 import { startBurpiReminderScheduler } from "./services/burpiReminders";
 import { prisma } from "./utils/prisma";
 import { initSocket, startTimerWatchdog } from "./socket";
@@ -43,6 +44,7 @@ app.use("/api/telegram", telegramWebhookRouter);
 app.use("/api/training", trainingRouter);
 app.use("/api/burpi-reminders", burpiRemindersRouter);
 app.use("/api/burpi-opus", burpiOpusRouter);
+app.use("/api/chitopus", chitopusRouter);
 
 app.use((err: any, _req: any, res: any, _next: any) => {
   console.error("[express error]", err);
