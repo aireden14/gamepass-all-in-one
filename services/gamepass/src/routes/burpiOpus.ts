@@ -364,6 +364,94 @@ burpiOpusRouter.get("/remote/state", callerAuth, (req: BurpiRequest, res: Respon
   res.json({ online, speed: state?.speed ?? 22, playing: state?.playing ?? false, title: state?.title ?? "" });
 });
 
+/* ---------------------------------------------------- пульт сериалов */
+
+// Второй пульт на часах — для сериалов на Маке (Torrent Player или видео в
+// Chrome). Команды забирает tg-mac-agent тем же длинным опросом, что и Суфлёр.
+type TvCmd = { id: number; cmd: string; value: number; at: number };
+type TvState = { source: string; title: string; playing: boolean; volume: number; at: number };
+const TV_CMDS = new Set(["toggle", "seek", "volume", "next", "prev", "fullscreen"]);
+const tvQueues = new Map<number, TvCmd[]>();
+const tvWaiters = new Map<number, Set<() => void>>();
+const tvStates = new Map<number, TvState>();
+let tvSeq = 0;
+
+function tvFresh(userId: number) {
+  const now = Date.now();
+  const queue = (tvQueues.get(userId) || []).filter((c) => now - c.at < REMOTE_TTL_MS);
+  tvQueues.set(userId, queue);
+  return queue;
+}
+
+// POST /api/burpi-opus/tv — { cmd, value? } с часов.
+burpiOpusRouter.post("/tv", callerAuth, (req: BurpiRequest, res: Response) => {
+  const userId = req.caller!.userId;
+  const cmd = String(req.body?.cmd || "");
+  if (!TV_CMDS.has(cmd)) return res.status(400).json({ error: "bad cmd" });
+  const raw = Number(req.body?.value);
+  const value = Number.isFinite(raw) ? Math.max(-3600, Math.min(3600, raw)) : 0;
+  const queue = tvFresh(userId);
+  queue.push({ id: ++tvSeq, cmd, value, at: Date.now() });
+  if (queue.length > 50) queue.splice(0, queue.length - 50);
+  tvWaiters.get(userId)?.forEach((wake) => wake());
+  res.json({ ok: true });
+});
+
+// GET /api/burpi-opus/tv/poll?after=<id> — Мак ждёт команды до 20 с.
+burpiOpusRouter.get("/tv/poll", callerAuth, (req: BurpiRequest, res: Response) => {
+  const userId = req.caller!.userId;
+  const requested = Number(req.query.after) || 0;
+  const after = requested > tvSeq ? 0 : requested;
+  const pick = () => tvFresh(userId).filter((c) => c.id > after);
+  const ready = pick();
+  if (ready.length) return res.json({ cmds: ready, last: ready[ready.length - 1].id });
+
+  const waiters = tvWaiters.get(userId) || new Set<() => void>();
+  tvWaiters.set(userId, waiters);
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    waiters.delete(finish);
+    const cmds = pick();
+    res.json({ cmds, last: cmds.length ? cmds[cmds.length - 1].id : Math.max(after, tvSeq) });
+  };
+  const timer = setTimeout(finish, REMOTE_POLL_MS);
+  waiters.add(finish);
+  req.on("close", () => {
+    done = true;
+    clearTimeout(timer);
+    waiters.delete(finish);
+  });
+});
+
+// POST /api/burpi-opus/tv/state — Мак сообщает, что сейчас играет.
+burpiOpusRouter.post("/tv/state", callerAuth, (req: BurpiRequest, res: Response) => {
+  const source = ["torrent", "browser"].includes(req.body?.source) ? String(req.body.source) : "none";
+  tvStates.set(req.caller!.userId, {
+    source,
+    title: String(req.body?.title || "").slice(0, 80),
+    playing: req.body?.playing === true,
+    volume: Math.max(0, Math.min(100, Number(req.body?.volume) || 0)),
+    at: Date.now(),
+  });
+  res.json({ ok: true });
+});
+
+// GET /api/burpi-opus/tv/state — часы узнают, на связи ли Мак и что играет.
+burpiOpusRouter.get("/tv/state", callerAuth, (req: BurpiRequest, res: Response) => {
+  const state = tvStates.get(req.caller!.userId);
+  const online = !!state && Date.now() - state.at < 60_000;
+  res.json({
+    online,
+    source: online ? state!.source : "none",
+    title: online ? state!.title : "",
+    playing: online ? state!.playing : false,
+    volume: state?.volume ?? 0,
+  });
+});
+
 /* ------------------------------------------------------------ друзья */
 
 const FRIEND_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
