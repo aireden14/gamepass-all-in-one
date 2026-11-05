@@ -13,7 +13,7 @@ import { trainingRouter } from "./routes/training";
 import { burpiRemindersRouter } from "./routes/burpiReminders";
 import { burpiOpusRouter } from "./routes/burpiOpus";
 import { chitopusRouter } from "./routes/chitopus";
-import { startBurpiReminderScheduler } from "./services/burpiReminders";
+// import { startBurpiReminderScheduler } from "./services/burpiReminders";
 import { prisma } from "./utils/prisma";
 import { initSocket, startTimerWatchdog } from "./socket";
 
@@ -55,7 +55,8 @@ const port = Number(process.env.PORT || 3001);
 const httpServer = createServer(app);
 initSocket(httpServer, "");
 startTimerWatchdog();
-startBurpiReminderScheduler();
+// Напоминания BurpiOpus выключены по просьбе Дениса 05.11.2026 (слал каждый час).
+// startBurpiReminderScheduler();
 
 httpServer.listen(port, () => {
   console.log(`[chess] backend on :${port}`);
